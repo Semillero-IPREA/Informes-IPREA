@@ -1,0 +1,339 @@
+---
+title: <span style="color:#3c55b3">8. Aprendizaje automático con el paquete caret</span>
+output:
+  html_document:
+    df_print: paged
+---
+
+<div style="text-align: justify">
+
+
+Hasta ahora, hemos hecho aprendizaje automático de una manera muy ad hoc. Tenemos unos datos, queremos ajustar un modelo a ellos, y luego afinamos el modelo para que nos dé el mejor resultado basándonos en los procesos de muestreo que hayamos hecho y dependiendo de cómo estén organizados los datos en sí. Mucho de esto depende de la capacidad de reconocer cuándo hay que utilizar determinados algoritmos. Sólo con visualizar un conjunto de datos, normalmente podemos determinar si podemos aplicar una regresión lineal, si tiene sentido. Del mismo modo, hemos visto ejemplos en los que los datos son más adecuados para ser agrupados mediante un algoritmo `kmeans` o algo similar.
+
+Un problema que hemos visto es que muchos de estos algoritmos pueden ser muy diferentes entre sí. Las opciones de la función `lm()` son bastante diferentes de las de la función `nnet()`. Seguramente existe algo que proporciona una interfaz común para todos estos algoritmos diferentes pero de uso común. Estamos de suerte con R, ya que el paquete `caret` ofrece una gran cantidad de herramientas para ayudarnos a simplificar la construcción de modelos.
+
+El nombre "caret" es un acrónimo de "Classification and Regression Training", pero el paquete en sí es capaz de mucho más. En el entorno de R hay cientos de paquetes de aprendizaje automático. Familiarizarse con las peculiaridades y la funcionalidad especial de cada uno puede ser una tarea desalentadora. Por suerte para nosotros, `caret` proporciona una interfaz común para todos estos paquetes. Caret también proporciona una gran funcionalidad para dividir nuestros datos. Para nosotros es trivial dividir un marco de datos en un 70% de entrenamiento y un 30% de prueba, pero para formas más complejas de dividir los datos y muestrearlos, como el muestreo aleatorio estratificado, `caret` proporciona una buena manera de lograrlo. El paquete `caret` es también un sistema robusto para la selección de características. Podemos pedirle a `caret` que nos ayude a seleccionar las columnas o características que mejor se adaptan al tipo de modelo que queremos ejecutar. Por último, `caret` puede ayudar con una forma más ágil de afinar nuestros modelos. Como se ha mencionado anteriormente, no sólo algunos modelos pueden ser diferentes en cuanto a las opciones que toman, sino que a veces pueden ser terriblemente complicado. `caret` proporciona una buena funcionalidad para la simplificación sin perder la capacidad de ajuste del modelo robusto.
+
+
+## <span style="color:#3c55b3">El conjunto de datos del Titanic</span>
+
+
+En este capítulo, nos centramos en ver cómo `caret` ayuda al trabajar con un famoso conjunto de datos: el del condenado transatlántico Titanic, que se hundió en el Océano Atlántico Norte en 1912. Este conjunto de datos se utiliza a menudo en contextos educativos por muchas razones. Se trata de un acontecimiento histórico muy conocido, por lo que la mayoría de las personas que tratan con los datos ya tienen un contexto de los antecedentes. El conjunto de datos del Titanic es también un buen de otros tipos de datos habituales en la industria, como los datos de los perfiles de los clientes. El objetivo de este capítulo es utilizar el paquete `caret` para construir un modelo de aprendizaje automático en el que se intentará predecir si alguien sobrevivió a su viaje en el malogrado transatlántico. Construirá un modelo con la forma de función que hemos visto anteriormente en este libro, escrita como `train(Survived ~ .)`, en la que se modela a partir del parámetro `Survived`. Sin embargo, para modelar a partir de todos los demás datos que le interesan, puede que tenga que limpiar y organizar los datos un poco mejor a como están en su forma original.
+
+Exploremos los datos en un nivel superior para familiarizarnos mejor con ellos:
+
+```{r,message=FALSE}
+# https://www.kaggle.com/c/titanic/data?select=train.csv
+library(readr)
+train <- read_csv("train.csv")
+str(train)
+```
+
+Algunos de estos datos pueden parecerse a los que se ven en un típico análisis de "checkout" de clientes. Hay un ID único para cada pasajero; un valor binario que indica si el pasajero ha sobrevivido; qué clase de viaje llevaba a bordo (Primera, Segunda o Tercera); datos de información personal en forma de nombre, género, edad; el número de hermanos o cónyuges con los que viajaba; el número de padres o hijos con los que viajaba; su número de billete; la tarifa del billete; el número de cabina; y el punto de embarque (C es Cherburgo, Q es Queenstown y S es Southampton).
+
+Algunos de estos datos no son muy útiles para el análisis que va a realizar. Cosas como los identificadores únicos no revelan nada sobre las tendencias y sólo sirven para confundir los modelos. Podríamos incluso olvidarnos de `PassengerId` y `Name` en este caso. La información `Ticket` podría ser útil, pero el formato es una pesadilla. Los datos de `Cabin` podrían ser útiles, pero hay muchos valores que faltan. Así que para este ejercicio, vamos a dejar de lado `PassengerId`, `Name`, `Ticket` y `Cabin`.
+
+
+### <span style="color:#3c55b3">Gestión de datos</span>
+
+
+Hay algunos pasos de limpieza de datos que se deben realizar antes de ingresar los datos en los modelos. Observe que `Embarked` tiene un par de valores en blanco. `Age` tiene algunos valores no disponibles, y es posible que quiera dividir algunos de los datos de `SibSp` y `Parch` en formas más coherentes para que el modelo sepa cómo tratar esa información mejor. Tratemos primero los datos que faltan de `Embarked`:
+
+```{r}
+table(train$Embarked)
+```
+
+En este trozo de código, hay dos espacios en blanco, 168 personas embarcadas en Cherburgo, 77 personas embarcadas en Queenstown y 644 embarcadas en Southampton. Supongamos (más formalmente conocido como imputación) que esos dos espacios en blanco pueden ser etiquetados como el factor más grande para esa variable. Así que en este caso, estás asumiendo que los espacios en blanco son de Southampton porque la mayoría de los puntos de datos embarcados lo son, así que probablemente sea una apuesta segura. Si los datos fueran más homogéneos, tendría que formular una solución más complicada, como se ilustra aquí:
+
+```{r}
+train$Embarked[train$Embarked == ""] <- "S"
+
+```
+
+
+Ahora ha asignado esos espacios en blanco al valor que tiene más frecuencia. A continuación, vamos a ver las edades en los datos:
+
+```{r}
+table(is.na(train$Age))[2]/table(is.na(train$Age))[1]
+```
+```{r}
+summary(train$Age)
+```
+Este código nos informa que hace falta casi el 25% de los datos de la edad. Si mira las estadísticas de resumen de esa columna, podría hacer el mismo proceso que hizo antes, simplemente sustituyendo todos los valores que faltan por el valor más frecuente (en este caso, la mediana) de esos datos. En ese caso, estaría reasignando la edad de todas las personas que faltan a 28 años, pero intuitivamente parece que estaría haciendo una suposición bastante atrevida. Una apuesta más segura sería simplemente añadir una etiqueta si la edad falta para una persona determinada y rellenar esos datos más tarde utilizando el poder de `caret`:
+
+```{r}
+train$is_age_missing <- ifelse(is.na(train$Age), 1, 0)
+```
+
+Ahora, consolide los datos que tienen el número de hermanos y cónyuges (`SibSp`) y los padres e hijos (`Parch`) con los que la persona viajaba en un número total de viajeros. Esto ayudará a la selección del modelo más adelante:
+
+```{r}
+train$travelers <- train$SibSp + train$Parch + 1
+```
+A continuación, hay que categorizar algunos datos:
+```{r}
+train$Survived <- as.factor(train$Survived)
+train$Pclass <- as.factor(train$Pclass)
+train$is_age_missing <- as.factor(train$is_age_missing)
+```
+Por último, es conveniente hacer subconjuntos de los datos sólo con las características que le interesan:
+```{r}
+train2 <- subset(train, select = c(Survived, Pclass, Sex, Age,
+ SibSp, Parch, Fare, Embarked, is_age_missing, travelers))
+
+```
+
+## <span style="color:#3c55b3">Desatando caret</span>
+
+
+Ahora que tenemos los datos del Titanic depurados, es el momento de empezar a utilizar el paquete `caret`. R tiene muchos modelos de aprendizaje automático incorporados o accesibles mediante la descarga de paquetes. Sin embargo, el poder de `caret` es que podemos hacer mucho más que simplemente entrenar modelos de aprendizaje automático. Podemos utilizar `caret` como una herramienta de preprocesamiento de datos para ayudar con la imputación de datos, podemos utilizarlo para dividir nuestros datos en conjuntos de entrenamiento y de prueba, y podemos aprovecharlo para las técnicas de validación cruzada, además de su gran flexibilidad para el entrenamiento de modelos.
+
+### <span style="color:#3c55b3">Imputación</span>
+
+En esta subsección, vamos a retomar el problema que vimos antes de tener muchas edades perdidas en los datos. Ya hemos dicho que `caret` es bueno para resolver este problema y, de hecho, admite muchos métodos diferentes de asignación. `caret` admite la asignación mediante la elección de la mediana (de forma similar a como se eligieron los valores para la ubicación de embarque que faltaba anteriormente); admite un método de asignación basado en los vecinos más cercanos (kNN), que podría ser útil en otras situaciones; y admite la asignación mediante árboles de decisión empaquetados (*Bagged decision trees*), que son bastante similares en teoría a los bosques aleatorios. En este caso, se opta por los árboles de decisión empaquetados porque es el método más preciso.
+A pesar del peso computacional de este método, este conjunto de datos en particular es lo suficientemente pequeño que se puede ejecutar sin una gran perdida de tiempo.
+
+La limitación de la imputación en `caret` es que hay que cambiar todas las variables de categoría "factor" a datos numéricos para que el proceso funcione correctamente. Por ejemplo, los datos de `Embark` son categóricos con tres valores (C, Q, S); es necesario transponerlos a valores numéricos. Podría tener la tentación de reetiquetar C a 0, Q a 1 y S a 2, pero esto no funcionaría bien con el modelo. En su lugar, debe tomar y pivotar esos datos de forma que tenga una columna que sea 0 o 1 si su `Embark` es C, 0 o 1 si su `Embark` es Q, y de igual forma para S. Esto se ve mejor cuando ejecuta el código:
+
+```{r,message=FALSE,error=FALSE}
+library(caret)
+dummy <- dummyVars(~., data = train2[, -1])
+dummy_train <- predict(dummy, train2[, -1])
+head(dummy_train)
+```
+Este código divide los posibles valores categóricos que podría tomar `Pclass` (1,2,3) en columnas separadas que son un indicador binario si eran de primera clase, de segunda clase o de tercera clase. Lo mismo ocurre con las demás variables categóricas únicamente. Sorprendentemente, `caret` es lo suficientemente inteligente como para realizar esta función sólo en las variables factores, no en los datos que ya son numéricos. Ahora, todos nuestros datos están en una forma numérica práctica y tienen más sentido desde el punto de vista de la modelización. El siguiente paso es utilizar la función `preProcess`. Observe que la vista previa todavía muestra un valor NA para un pasajero; este es el paso que rellena ese valor. La función `preProcess` es muy potente y ofrece más de 15 métodos diferentes para modelar los valores que quiere, pero vamos a seguir con `bagImpute` por ahora:
+
+```{r}
+pre.process <- preProcess(dummy_train, method = "bagImpute")
+imputed.data <- predict(pre.process, dummy_train)
+head(imputed.data)
+```
+La edad única de NA que tenía antes se ha predicho mediante árboles de decisión "empaquetados" para tener una edad de 28,96071. Todos los valores NA han desaparecido y han sido sustituidos por predicciones numéricas. El último paso es tomar estos valores predichos y devolverlos al conjunto de entrenamiento original:
+
+```{r}
+train$Age <- imputed.data[, 6]
+head(train$Age, 20)
+```
+En este punto, tiene algunas edades rellenadas que antes eran NAs, como indica el número de dígitos después del decimal. Ha predicho edades de 28,96071, 33,02747 y 24,55931 para las primeras 20 entradas de datos. 
+
+### <span style="color:#3c55b3">División de datos</span>
+
+Veamos ahora cómo se puede utilizar `caret` para dividir los datos en conjuntos de entrenamiento y de prueba. Si el conjunto de datos tuviera cerca de un 50% de supervivientes, podríamos hacer un muestreo aleatorio  simple, extrayendo la mitad de los datos sobre los que entrenar. En cambio, hay que hacer un muestreo aleatorio estratificado debido al desequilibrio entre los que sobrevivieron y los que no. Este paso siguiente mantendrá las proporciones de la característica `Survided` igual en cada una de las divisiones estratificadas. Estás indicandole a la función `createDataPartition` que quieres que esta división se ejecute sólo una vez, pero en teoría podría ejecutarse varias veces. Estás tomando el 70% de los datos de entrenamiento y, finalmente, la opción de `list` sólo le da los números de fila de la partición que puede pasar de nuevo a los datos de entrenamiento para dividirlos efectivamente: 
+
+```{r}
+set.seed(123)
+partition_indexes <- createDataPartition(train$Survived, times = 1,
+ p = 0.7, list = FALSE)
+titanic.train <- train[partition_indexes, ]
+titanic.test <- train[-partition_indexes, ]
+```
+
+### <span style="color:#3c55b3">Detrás de caret</span>
+
+Antes de empezar a entrenar modelos con `caret`, echemos un vistazo a todo lo que se puede hacer para ajustar el modelo. En el nivel más alto, `caret` tiene este aspecto:
+
+```{r}
+#train.model <- train(Survived ~ ., data = titanic.train, method = "xgbTree",
+#tuneGrid = tune.grid, trControl = train.control)
+```
+
+
+Es probable que vea una forma similar a la de otros escenarios de entrenamiento de modelos de aprendizaje automático que ha visto para los que hay una respuesta, en este caso, `survided` que se modela contra todas las demás características de su conjunto de datos. Vamos a ampliar las otras características:
+
+**data:**
+Esto se explica por sí mismo- es el objeto del que se obtienen los datos de entrenamiento.
+
+**method:**
+Se trata del algoritmo de aprendizaje automático específico que se desea implementar. El
+que está utilizando por el momento, `xgbTree`, es una forma de árboles de decisión.
+
+**tuneGrid:**
+Este es un marco de datos de parámetros que puede pasar a su modelo de entrenamiento y hacer que el modelo se entrene y evalúe para esos parámetros y luego pase al siguiente conjunto de parámetros. Esto depende del modelo, pero verá cómo puede entender mejor cómo usarlo.
+
+**trControl:**
+Las opciones de control de entrenamiento le permiten especificar cómo desea realizar las técnicas de validación cruzada para el entrenamiento.
+
+## <span style="color:#3c55b3">Métodos de caret</span>
+
+Profundicemos un poco más en el método. Aquí podemos especificar un algoritmo específico de aprendizaje automático que se utilizará para el entrenamiento del modelo. La lista de métodos legales a utilizar es colosal y se incluye en el apéndice de este libro. Hay más de 200 métodos que puede conectar y con los que puede jugar para cambiar los modelos de aprendizaje automático sobre la marcha. Si no quisiéramos preocuparnos por la rejilla de parámetros de ajuste, podríamos simplemente cambiar `xgbTree` por `rf`, y ahora estamos haciendo un modelo de bosque aleatorio. Podríamos cambiar `rf` por `nnet`, y ahora estamos haciendo una red neuronal. Es casi impactante lo que `caret` hace para que probar diferentes algoritmos de aprendizaje automático sea muy fácil.
+
+Además, con nuestro método de `xgbTree`, podemos ver todos los diferentes trabajos internos que se realizan llamando a la función `getModelInfo` de `caret`
+
+```{r, echo=TRUE, eval=FALSE}
+getModelInfo("xgbTree")
+```
+En cada uno de los más de 200 modelos disponibles en `caret` hay una gran cantidad de cosas ocultas. Algunas de ellas son sólo entradas descriptivas del modelo, otras son componentes de entrada a cada modelo de `caret`, y algunas son opcionales:
+
+* ***label:***
+Nombre del modelo -en este caso, "eXtreme Gradient Boosting".
+
+* ***library:***
+Las librerías o paquetes necesarios para ejecutar este modelo. `caret` le pide que descargue las librerías si no las tiene ya instaladas, y las cargará sobre la marcha si las tiene.
+
+* ***type:***
+¿El modelo es capaz de manejar la regresión, la clasificación o ambas? En este caso ambos, porque tenemos "Both" (ambos) como salida
+
+* ***parameters:***
+Se trata de un marco de datos de los parámetros, las clases de parámetros (es decir, numéricos) y las etiquetas específicas utilizadas para afinar el modelo.
+
+* ***grid:***
+Función utilizada para crear la rejilla o cuadrícula de ajuste, a menos que el usuario especifique lo contrario.
+
+* ***loop:***
+Parámetro opcional que permite a los usuarios crear múltiples predicciones de submodelos a partir del mismo objeto.
+
+* ***fit:***
+Esto es lo que realmente se ajusta al modelo.
+
+* ***predict:***
+Función para crear predicciones del modelo.
+
+* ***prob:***
+En su caso, esta función crea probabilidades de clase.
+
+* ***predictors:***
+Función opcional que devuelve los nombres de las características que utilizamos como predictores en nuestro modelo.
+
+* ***varImp:***
+Función opcional que calcula la importancia de las variables.
+
+* ***levels:***
+Función opcional, normalmente utilizada para los modelos de clasificación que utilizan un método S4 específico.
+
+* ***tags:***
+Entradas descriptivas sobre lo que el modelo es capaz de hacer específicamente. Aquí tenemos las etiquetas: "modelo basado en árboles, boosting, modelo de conjunto, selección implícita de características".
+
+* ***sort:***
+Función que ordena el parámetro por orden decreciente de complejidad.
+
+Profundizando en el campo de los parámetros, puede ver todas las formas diferentes en que puede afinar este modelo específico:
+
+```{r}
+xgb.params <- getModelInfo("xgbTree")
+xgb.params$xgbTree$parameters
+```
+También podemos comparar los parámetros de ajuste de los distintos modelos:
+```{r}
+nnet.params <- getModelInfo("nnet")
+nnet.params$nnet$parameters
+```
+Esta gran cantidad de información nos enseña no sólo de qué es capaz un algoritmo nuevo y potencialmente desconocido, sino cómo funciona a nivel de código y cuál es la mejor manera de ajustarlo para obtener resultados óptimos.
+
+
+### <span style="color:#3c55b3">Entrenamiento del modelo</span>
+
+Por último, podemos entrar en el meollo de la construcción del modelo. Primero hay que especificar qué controles de entrenamiento pasar al modelo. Básicamente, usted le está diciendo a `caret` cómo quiere que se construya el modelo. El punto clave aquí es que el proceso de entrenamiento del modelo es independiente del modelo que elija. Le está diciendo a `caret` que le gustaría hacer una validación cruzada de 10 iteraciones, repetida tres veces, y luego ir a través de una cuadrícula de búsqueda. Una cuadrícula de búsqueda es cuando usted va a través de una colección de parámetros y elige los más óptimos. Esencialmente, esto es hacer 30 pseudo-modelos y la selección de la parámetros que corresponden al mejor; así es como se hace:
+```{r}
+train.control <- trainControl(method = "repeatedcv", number = 10,
+ repeats = 3, search = "grid")
+
+```
+En el siguiente código, la función `expand.grid()` crea todas las permutaciones de todos los valores que se le pasan y crea una fila única para cada permutación:
+```{r}
+tune.grid <- expand.grid(eta = c(0.05, 0.075, 0.1),
+ nrounds = c(50, 75, 100),
+ max_depth = 6:8,
+ min_child_weight = c(2.0, 2.25, 2.5),
+ colsample_bytree = c(0.3, 0.4, 0.5),
+ gamma = 0
+ #subsample = 1
+)
+head(tune.grid)
+```
+El marco de datos resultante tiene 243 combinaciones de los valores que usted pone en la función `expand.grid()`. Le está pidiendo a `caret` que ejecute una validación cruzada de 10 iteraciones en cada uno de estos valores que usted pasa al algoritmo. Por lo tanto, ahora está entrenando 7.290 modelos diferentes. Eso va a tomar una eternidad para calcular, ¿verdad?.
+
+Resulta que hay un paquete para paralelizar el código de R y hacer que cosas como ésta se ejecuten más rápido. Desde el paquete `doSnow`, puede utilizar una función que ejecutará varias instancias de R al mismo tiempo con su código. La función `registerDoSnow()` le dice a `caret` que ahora puede usar los clusters disponibles para el procesamiento:
+```{r, message=FALSE, warning=FALSE}
+library(doSNOW)
+cl <- makeCluster(3, type = "SOCK")
+registerDoSNOW(cl)
+```
+
+Ahora, el uso real de `caret` para el entrenamiento. Aquí tenemos una estructura similar a la que hemos visto en los algoritmos anteriores. Usted está tomando la variable de respuesta, `Survived`, y el modelado de todos los otros factores en contra de ella. Usted está usando un algoritmo `xg-boost` en particular y lo hace iterar sobre todas las diferentes permutaciones de los parámetros de ajuste dados por la cuadrícula que se expandió anteriormente. Por último, le está indicando que utilice los controles de entrenamiento de una validación cruzada de 10 iteraciones y que lo haga tres veces. A continuación, se detiene la configuración del clúster paralelizado para ahorrar recursos computacionales, dado que se ha terminado con el procedimiento de entrenamiento exhaustivo.
+
+
+```{r}
+#caret.cv <- train(Survived ~ ., data = titanic.train, method = "xgbTree",
+ #tuneGrid = tune.grid, trControl = train.control)
+#stopCluster(cl)
+```
+
+Aquí encontramos los resultados:
+
+```{r}
+#caret.cv
+```
+
+<center>
+
+![](https://github.com/Semillero-IPREA/Informes-IPREA/blob/main/imagenes/Figura8_1.PNG?raw=true){width="700px"}
+
+</center>
+
+
+Esto muestra los resultados para cada una de las combinaciones de salidas de modelado. Hay tantas salidas de la consola que muchas cosas acaban siendo truncadas, pero todo lo esencial se muestra.
+
+<center>
+
+![](https://github.com/Semillero-IPREA/Informes-IPREA/blob/main/imagenes/Figura8_2.PNG?raw=true){width="700px"}
+
+</center>
+
+Esto nos dice que para seleccionar los valores óptimos para el modelado, están los hiperparámetros `xg-boost` (del ejercicio anterior de expansión de la cuadrícula) que funcionan mejor. Ahora que tiene su modelo entrenado, puede pasarlo a una función de predicción para modelar la probabilidad de que alguien haya sobrevivido al desastre del Titanic:
+
+```{r}
+#preds <- predict(caret.cv, titanic.test)
+```
+
+
+
+Por último, se evalúa la capacidad del modelo sometiéndolo a una matriz de confusión para ver si funciona bien con los nuevos datos:
+
+```{r}
+#confusionMatrix(preds, titanic.test$Survived)
+```
+
+![](https://github.com/Semillero-IPREA/Informes-IPREA/blob/main/imagenes/Figura8_3.PNG?raw=true)
+
+La matriz de confusión proporcionada por `caret` es muy potente. Proporciona toda una serie de información estadística que puede utilizar para determinar la precisión del modelo, no sólo para la clasificación, sino también para los problemas de regresión. Paso a paso, se comienza con una matriz de confusión real. Los valores correctos predichos por el modelo se encuentran en la diagonal, por lo que en este caso predijo correctamente 151 valores de los datos que eran Survived=0, pero predijo incorrectamente 32 de ellos. Igualmente, con el otro valor de Survived=1 para el que predijo 70 valores correctos y 13 incorrectos. La precisión fue de aproximadamente el 87%, lo que no está mal.
+
+Los resultados de esta función nos muestra la sensibilidad y la especificidad. La sensibilidad, en este caso, es simplemente la clase "positiva" predicha correctamente del número total, así que ${151\over (151+13)}$, lo que da $0,9207$. Lo que significa en español es que el $92\%$ de las veces se puede predecir correctamente si alguien murió en el Titanic. Del mismo modo, la especificidad es la otra columna de datos de la matriz de confusión, que se calcularía como ${70 \over (70+32)}$ y da $0,6862$. Esto es predecir con exactitud si alguien vivió o no. Lo que esto le dice es que necesita ser más riguroso en cuanto a encontrar algunas características que predigan mejor cómo la gente sobrevivió al Titanic, dado que el modelo ya es bastante preciso para predecir si murieron.
+
+
+### <span style="color:#3c55b3">Comparando diferentes modelos caret</span>
+
+Hasta ahora, has ejecutado un algoritmo de aprendizaje automático (árboles de decisión de gradiente extremo) en los datos del Titanic y has conseguido un resultado bastante decente. Es muy fácil conectar y reproducir diferentes algoritmos de aprendizaje automático para poder comparar y contrastar los resultados. Supongamos que quiere comparar la precisión de un bosque aleatorio y de una red neuronal. Todo lo que tiene que hacer es sustituir `xgboost` por `rf`. Por el momento, ignore los parámetros específicos de la red de ajuste y ejecútelo normalmente.
+
+```{r}
+# <- makeCluster(3, type="SOCK")
+#registerDoSNOW(cl)
+#caret.rf <- train(Survived ~ .,
+ #data = titanic.train,
+ #method = "rf",
+ #tuneGrid = tune.grid,
+ #trControl = train.control)
+#stopCluster(cl)
+#confusionMatrix(predict(caret.rf, titanic.test), titanic.test$Survived)
+```
+
+![](https://github.com/Semillero-IPREA/Informes-IPREA/blob/main/imagenes/Figura8_4.PNG?raw=true)
+![](https://github.com/Semillero-IPREA/Informes-IPREA/blob/main/imagenes/Figura8_5.PNG?raw=true)
+
+La precisión aquí, sin ningún ajuste específico realizado, es del 80%. No está mal para un simple cambio de unos pocos caracteres en el modelo de entrenamiento. El modelo `xgboost` ha dado un 85% de precisión, y eso después de un largo proceso de ajuste. Supongamos que quiere ejecutar un modelo lineal generalizado. Usted puede ejecutar la misma lógica usando `glm` como su algoritmo de elección:
+
+```{r}
+#cl <- makeCluster(3, type="SOCK")
+#registerDoSNOW(cl)
+#caret.nnet <- train(Survived ~ .,
+ #data = titanic.train,
+ #method = "glm",
+ #tuneGrid = tune.grid,
+ #trControl = train.control)
+#stopCluster(cl)
+#confusionMatrix(predict(caret.nnet, titanic.test), titanic.test$Survived)
+```
+
+![](https://github.com/Semillero-IPREA/Informes-IPREA/blob/main/imagenes/Figura8_6.PNG?raw=true)
+
+El resultado de `accuracy` (precisión) no es muy bueno, pero es probable que pueda resolver este problema ajustando los parámetros de la cuadrícula.
+
