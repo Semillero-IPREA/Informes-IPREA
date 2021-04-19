@@ -1,5 +1,5 @@
 ---
-title: "Neural Networks in a Nutshell"
+title:  <span style="color:#3c55b3">5. Redes neuronales en pocas palabras</span>
 author: "IPREA"
 date: "19/4/2021"
 output: html_document
